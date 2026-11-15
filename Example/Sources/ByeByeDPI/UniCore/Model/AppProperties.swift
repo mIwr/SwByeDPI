@@ -10,9 +10,8 @@ import SwByeDPI
 
 class AppProperties: Codable, ObservableObject
 {
-    //dns comss: IPV4 - 83.220.169.155, 195.133.25.16; IPV6 - 2a03:6f00:a::3f24 и 2a03:6f00:a::2944; https://dns.comss.one/dns-query
     fileprivate static let _defaultDoH = "https://dns.comss.one/dns-query"
-    fileprivate static let _defaultResolvedDnsServers = ["83.220.169.155", "195.133.25.16"]
+    fileprivate static let _defaultResolvedDnsServers = ["83.220.169.155", "195.133.25.16", "212.109.195.93"]
     fileprivate static let _plistFilename = Constants.PSEUDO_BUNDLE_ID
     
     @Published var byeDPILaunchConfig: SBDConfig {

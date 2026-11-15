@@ -42,11 +42,34 @@
 #endif
 
 
-int server_fd;
+#define RFD_COUNT 2
+
+int server_fd, res_fds[RFD_COUNT];
 
 static void on_cancel(int sig) {
     shutdown(server_fd, SHUT_RDWR);
 }
+
+static int accept_close(int fd)
+{
+    #ifndef _WIN32
+    for (size_t i = 0; i < RFD_COUNT; i++) {
+        if (res_fds[i] > 0) close(res_fds[i]);
+    }
+    if (fd > 0) {
+        int c = accept(fd, 0, 0);
+        if (c > 0) 
+            close(c);
+        else if (errno != EAGAIN) 
+            return -1;
+    }
+    for (size_t i = 0; i < RFD_COUNT; i++) {
+        res_fds[i] = dup(0);
+    }
+    #endif
+    return 0;
+}
+
 
 void dump_all_cache(void);
 
@@ -344,12 +367,52 @@ int s5_set_addr(char *buffer, size_t n,
 }
 
 
+static int connect_target(
+        const char *buff, size_t n, char **hs, uint16_t *port)
+{
+    const char *end = buff + n, *host = buff + 8;
+    
+    if (n < 10 || memcmp(buff, "CONNECT ", 8)) {
+        return 0;
+    }
+    const char *t_end = memchr(host, ' ', end - host);
+    if (!t_end) {
+        return 0;
+    }
+    const char *colon = t_end;
+    while (--colon > host && *colon >= '0' && *colon <= '9');
+    
+    if (*colon != ':' || colon + 1 == t_end) {
+        return 0;
+    }
+    char *e;
+    long i = strtol(colon + 1, &e, 10);
+    if (i <= 0 || i > 0xffff || e != t_end) {
+        return 0;
+    }
+    const char *h_end = colon;
+    if (*host == '[') {
+        if (h_end - host < 2 || h_end[-1] != ']') {
+            return 0;
+        }
+        host++;
+        h_end--;
+    }
+    *hs = (char *)host;
+    *port = i;
+    return h_end - host;
+}
+
+
 static int http_get_addr(
         const char *buff, size_t n, union sockaddr_u *dst)
 {
     char *host = 0;
     uint16_t port = 0;
-    int host_len = parse_http(buff, n, &host, &port);
+    int host_len = connect_target(buff, n, &host, &port);
+    if (!host_len) {
+        host_len = parse_http(buff, n, &host, &port);
+    }
     
     if (host_len < 3 || host_len > 255) {
         return -1;
@@ -454,18 +517,16 @@ int create_conn(struct poolhd *pool,
         close(sfd);
         return -1;
     }
-    if (LOG_ENABLED) {
-        INIT_ADDR_STR((*dst));
-        LOG(LOG_S, "new conn: fd=%d, pair=%d, addr=%s:%d\n", 
-            sfd, val->fd, ADDR_STR, ntohs(dst->in.sin_port));
-    }
+    LOG(LOG_S, "new conn: fd=%d, pair=%d, addr=%s:%d\n", 
+        sfd, val->fd, straddr(*dst).s, ntohs(dst->in.sin_port));
+    
     int status = connect(sfd, &addr.sa, SA_SIZE(&addr));
     if (status == 0 && params.tfo) {
         LOG(LOG_S, "TFO supported!\n");
     }
     if (status < 0 && 
             get_e() != EINPROGRESS && get_e() != EAGAIN) {
-        uniperror("connect");
+        LOG(LOG_E, "connect: %s (addr=%s)\n", strerr(get_e()).s, straddr(addr).s);
         close(sfd);
         return -1;
     }
@@ -532,11 +593,9 @@ static int udp_associate(struct poolhd *pool,
         close(cfd);
         return -1;
     }
-    if (LOG_ENABLED) {
-        INIT_ADDR_STR((*dst));
-        LOG(LOG_S, "udp associate: fds=%d,%d,%d addr=%s:%d\n", 
-            ufd, cfd, val->fd, ADDR_STR, ntohs(dst->in.sin_port));
-    }
+    LOG(LOG_S, "udp associate: fds=%d,%d,%d addr=%s:%d\n", 
+        ufd, cfd, val->fd, straddr(*dst).s, ntohs(dst->in.sin_port));
+
     val->cb = &on_ignore;
     val->pair = client;
     client->pair = pair;
@@ -595,7 +654,6 @@ static inline int transp_conn(struct poolhd *pool, struct eval *val)
     }
     int error = connect_hook(pool, val, &remote, &on_connect);
     if (error) {
-        uniperror("connect_hook");
         return -1;
     }
     return 0;
@@ -616,13 +674,18 @@ static int on_accept(struct poolhd *pool, struct eval *val, int et)
         #endif
         if (c < 0) {
             if (get_e() == EAGAIN ||
-                    get_e() == EINPROGRESS)
+                    get_e() == EINPROGRESS) {
                 break;
+            }
             uniperror("accept");
+            if (get_e() == EMFILE
+                && accept_close(val->fd) > -1) {
+                    break;
+            }
             pool->brk = 1;
             return -1;
         }
-        LOG(LOG_S, "accept: fd=%d\n", c);
+        LOG(LOG_S, "accept: fd=%d, from=%s\n", c, straddr(client).s);
         #ifndef __linux__
         #ifdef _WIN32
         unsigned long mode = 1;
@@ -666,12 +729,13 @@ int on_tunnel(struct poolhd *pool, struct eval *val, int etype)
     bool wait = false;
     struct eval *pair = val->pair;
     
-    if (etype == POLLTIMEOUT && !pair->buff && val->round_count) {
-        LOG(LOG_S, "timeout (%u) (fd=%d)\n", val->to_count, val->fd);
+    if (etype == POLLTIMEOUT && val->tv_type == TV_TIMEOUT) {
+        LOG(LOG_S, "timeout (%u) (fd=%d, addr=%s)\n", 
+            val->to_count, val->fd, straddr(val->addr).s);
         return on_timeout(pool, val);
     }
     if (etype & POLLOUT || etype == POLLTIMEOUT) {
-        LOG(LOG_S, "pollout (fd=%d)\n", val->fd);
+        LOG(LOG_L, "pollout (fd=%d)\n", val->fd);
         val = pair;
         pair = val->pair;
     }
@@ -797,9 +861,8 @@ int on_udp_tunnel(struct poolhd *pool, struct eval *val, int et)
                 if (params.baddr.sa.sa_family != addr.sa.sa_family) {
                     return -1;
                 }
-                INIT_ADDR_STR((addr));
                 LOG(LOG_S, "udp addr: fd=%d, addr=%s:%d\n", 
-                    val->fd, ADDR_STR, ntohs(addr.in.sin_port));
+                    val->fd, straddr(addr).s, ntohs(addr.in.sin_port));
                     
                 if (connect(pair->fd, &addr.sa, SA_SIZE(&addr)) < 0) {
                     uniperror("connect");
@@ -973,13 +1036,14 @@ int on_connect(struct poolhd *pool, struct eval *val, int et)
             uniperror("getsockopt SO_ERROR");
             return -1;
         }
+        LOG(LOG_E, "connect: %s (addr=%s)\n", strerr(error).s, straddr(val->addr).s);
         if (!error) error = ECONNREFUSED;
         
         switch (error) {
         case ECONNRESET:
         case ECONNREFUSED:
         case ETIMEDOUT:
-        //case EHOSTUNREACH:
+        case EHOSTUNREACH:
             if (on_connerr(pool, val) == 0) {
                 return 0;
             }
@@ -1073,6 +1137,8 @@ int run(const union sockaddr_u *srv)
     #ifdef SIGHUP
     signal(SIGHUP, on_hup);
     #endif
+    
+    accept_close(0);
     
     int fd = listen_socket(srv);
     if (fd < 0) {

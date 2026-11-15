@@ -46,8 +46,10 @@ struct ByeByeDPIApp: App {
                 //Test domains
                 BookTestDomains.domainsList,
                 CloudflareTestDomains.domainsList,
+                DeepSeekTestDomains.domainsList,
                 DiscordTestDomains.domainsList,
                 FacebookTestDomains.domainsList,
+                GithubTestDomains.domainsList,
                 GoogleVideoTestDomains.domainsList,
                 GoogleAiTestDomains.domainsList,
                 GoogleMeetTestDomains.domainsList,

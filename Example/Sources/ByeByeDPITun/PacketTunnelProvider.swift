@@ -217,7 +217,7 @@ misc:
             NEIPv4Route(destinationAddress: "172.16.0.0", subnetMask: "255.240.0.0"),
             NEIPv4Route(destinationAddress: "10.0.0.0",    subnetMask: "255.0.0.0"),
             NEIPv4Route(destinationAddress: "100.64.0.0",  subnetMask: "255.192.0.0"),
-            
+            //Check https://dns.quic.best/
             // Google DNS
             NEIPv4Route(destinationAddress: "8.8.8.8", subnetMask: "255.255.255.255"),
             NEIPv4Route(destinationAddress: "8.8.4.4", subnetMask: "255.255.255.255"),
@@ -230,6 +230,7 @@ misc:
             // Comss DNS
             NEIPv4Route(destinationAddress: "83.220.169.155", subnetMask: "255.255.255.255"),
             NEIPv4Route(destinationAddress: "195.133.25.16", subnetMask: "255.255.255.255"),
+            NEIPv4Route(destinationAddress: "212.109.195.93", subnetMask: "255.255.255.255"),
             // Adguard DNS
             NEIPv4Route(destinationAddress: "94.140.14.14", subnetMask: "255.255.255.255"),
             NEIPv4Route(destinationAddress: "94.140.14.15", subnetMask: "255.255.255.255"),

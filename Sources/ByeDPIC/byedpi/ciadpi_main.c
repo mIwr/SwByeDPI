@@ -19,6 +19,8 @@
     #include <netinet/in.h>
     #include <netinet/tcp.h>
     #include <sys/socket.h>
+    #include <sys/resource.h>
+    #include <ifaddrs.h>
     
     //#define DAEMON
 #else
@@ -84,8 +86,9 @@ static const char help_text[] = {
     "    -F, --tfo                 Enable TCP Fast Open\n"
     #endif
     #ifdef TIMEOUT_SUPPORT
-    "    -T, --timeout <s[:p:c:b]> Timeout waiting for response, after which trigger auto\n"
+    "    -T, --tcp-timeout <s[:b]> Set TCP_USER_TIMEOUT option\n"
     #endif
+    "    -W, --tls-timeout <s:c:b> Set TLS timeout\n"
     "    -A, --auto <t,r,s,n,c>    Try desync params after this option\n"
     "                              Detect: torst,redirect,ssl_err,none,conn\n"
     "    -L, --auto-mode <s,o,n>   Mode: swop,onreconn,noreconn\n"
@@ -152,8 +155,9 @@ const struct option options[] = {
     {"auto-mode",     1, 0, 'L'},
     {"cache-ttl",     1, 0, 'u'},
     #ifdef TIMEOUT_SUPPORT
-    {"timeout",       1, 0, 'T'},
+    {"tcp-timeout",   1, 0, 'T'},
     #endif
+    {"tls-timeout",   1, 0, 'W'},
     {"copy",          1, 0, 'B'},
     {"cache-file",    1, 0, 'y'},
     {"proto",         1, 0, 'K'},
@@ -182,13 +186,14 @@ const struct option options[] = {
     {"udp-fake",      1, 0, 'a'},
     {"def-ttl",       1, 0, 'g'},
     {"wait-send",     0, 0, 'Z'}, //
-    {"await-int",     1, 0, 'W'}, //
+    {"await-int",     1, 0, 'z'}, //
     #ifdef __linux__
     {"drop-sack",     0, 0, 'Y'},
     {"protect-path",  1, 0, 'P'}, //
     #endif
     {"ipset",         1, 0, 'j'},
     {"connect-to",    1, 0, 'C'}, //
+    {"rst",           0, 0, '0'}, //
     {"comment",       1, 0, '#'}, //
     {"cache-merge",   1, 0, '/'},
     {0}
@@ -411,28 +416,67 @@ int parse_ipset(struct mphdr *hdr, char *buffer, size_t size)
 }
 
 
+static int get_addr_ifname(const char *name, union sockaddr_u *addr)
+{
+    int err = -1, prefer_family = addr->sa.sa_family;
+
+    #ifndef _WIN32
+    struct ifaddrs *ifap, *ifa;
+    
+    if (getifaddrs(&ifap) || !ifap) {
+        uniperror("getifaddrs");
+        return -1;
+    }
+    for (ifa = ifap; ifa; ifa = ifa->ifa_next) {
+        if (strcmp(ifa->ifa_name, name)) {
+            continue;
+        }
+        if (!err && prefer_family
+                 && prefer_family != ifa->ifa_addr->sa_family) {
+            continue;
+        }
+        memcpy(addr, ifa->ifa_addr, SA_SIZE(ifa->ifa_addr));
+        err = 0;
+    }
+    freeifaddrs(ifap);
+    
+    if (err && prefer_family == AF_INET6) {
+        char *e = 0;
+        addr->in6.sin6_scope_id = strtol(name, &e, 10);
+        if (!*e) {
+            err = 0;
+        }
+    }
+    #endif
+    return err;
+}
+
+
 int get_addr(const char *str, union sockaddr_u *addr)
 {
-    uint16_t port = 0;
-    const char *s = str, *e = 0;
-    const char *end = 0, *p = str;
+    uint16_t port = addr->in.sin_port;
+    const char *s = str, *p = s, *e = strchr(str, 0);
     
     if (*str == '[') {
-        e = strchr(str, ']');
-        if (!e) return -1;
+        if (!(e = strchr(str, ']'))) {
+            return -1;
+        }
         s++; p = e + 1;
     }
     p = strchr(p, ':');
     if (p && isdigit(p[1])) {
+        const char *end = 0;
         long val = strtol(p + 1, (char **)&end, 0);
         if (val <= 0 || val > 0xffff || *end)
             return -1;
         else
             port = htons(val);
-        if (!e) e = p;
+        if (e > p) e = p;
     }
-    if (!e) {
-        e = strchr(str, 0);
+    const char *scope = strchr(s, '%');
+    if (scope) { 
+        p = e; 
+        if (e > scope) e = scope;
     }
     if (e != s) {
         char str_ip[(e - s) + 1];
@@ -448,20 +492,19 @@ int get_addr(const char *str, union sockaddr_u *addr)
         if (getaddrinfo(str_ip, 0, &hints, &res) || !res) {
             return -1;
         }
-        
-        if (res->ai_addr->sa_family == AF_INET6)
-            addr->in6.sin6_addr = (
-                (struct sockaddr_in6 *)res->ai_addr)->sin6_addr;
-        else
-            addr->in.sin_addr = (
-                (struct sockaddr_in *)res->ai_addr)->sin_addr;
-                
-        addr->sa.sa_family = res->ai_addr->sa_family;
+        memcpy(addr, res->ai_addr, SA_SIZE(res->ai_addr));
         freeaddrinfo(res);
     }
-    if (port) {
-        addr->in6.sin6_port = port;
+    if (scope) {
+        char str_scope[p - scope];
+        memcpy(str_scope, scope + 1, p - scope - 1);
+        str_scope[p - scope - 1] = 0;
+        
+        if (get_addr_ifname(str_scope, addr)) {
+            return -1;
+        }
     }
+    addr->in.sin_port = port;
     return 0;
 }
 
@@ -946,16 +989,21 @@ int parse_args(int argc, char **argv)
         case 'T':;
             float f = strtof(optarg, &end);
             params.timeout = (f * 1000);
-            
-            if (*end == ':') 
-                params.ptimeout = strtof(end + 1, &end) * 1000;
-            if (*end == ':') 
-                params.to_count_lim = strtof(end + 1, &end);
             if (*end == ':')
-                params.to_bytes_lim = strtof(end + 1, &end);
+                params.tcp_to_bytes_lim = strtof(end + 1, &end);
             if (*end)
                 invalid = 1;
-                
+            break;
+            
+        case 'W':
+            f = strtof(optarg, &end);
+            params.tls_timeout = (f * 1000);
+            if (*end == ':') 
+                params.tls_to_count_lim = strtof(end + 1, &end);
+            if (*end == ':')
+                params.tls_to_bytes_lim = strtof(end + 1, &end);
+            if (*end)
+                invalid = 1;
             break;
             
         case 'K':
@@ -1235,14 +1283,17 @@ int parse_args(int argc, char **argv)
             params.wait_send = 1;
             break;
         
-        case 'W':
+        case 'z':
             params.await_int = atoi(optarg);
+            break;
+            
+        case '0':
+            dp->rst = 1;
             break;
             
         case 'C':
             dp->out_type = get_addr_scheme(optarg, &dp->out_addr);
-            if ((dp->out_type & OUT_SUPPORT) != dp->out_type
-                    || !dp->out_addr.in6.sin6_port) {
+            if ((dp->out_type & OUT_SUPPORT) != dp->out_type) {
                 invalid = 1;
             }
             if (!dp->out_type) dp->out_type = MODE_SOCKS5;
@@ -1289,7 +1340,7 @@ int parse_args(int argc, char **argv)
 void dump_all_cache(void)
 {
     for (struct desync_params *dp = params.dp; dp; dp = dp->next) {
-        LOG(LOG_S, "group: %d (%s), triggered: %d, pri: %d\n", dp->id, dp->str, dp->fail_count, dp->pri);
+        LOG(LOG_S, "group: %d (%s), triggered: %d, pri: %d, calls: %d\n", dp->id, dp->str, dp->fail_count, dp->pri, dp->calls);
         if (dp->cache_file) {
             if (!strcmp(dp->cache_file, "-")) {
                 dump_cache(params.mempool, stdout, dp);
@@ -1324,6 +1375,22 @@ int init(void)
     if (params.pid_file 
             && (params.pid_fd = init_pid_file(params.pid_file)) < 0) {
         return -1;
+    }
+    #endif
+    
+    #ifndef _WIN32
+    struct rlimit r = { 0 };
+    rlim_t mc = params.max_open * 3 + 10;
+    
+    if (getrlimit(RLIMIT_NOFILE, &r) < 0) {
+        uniperror("getrlimit");
+    }
+    else if (r.rlim_cur < mc) {
+        r.rlim_cur = r.rlim_max < mc ? r.rlim_max : mc;
+        
+        if (setrlimit(RLIMIT_NOFILE, &r) < 0) {
+            uniperror("setrlimit");
+        }
     }
     #endif
     return 0;
@@ -1381,8 +1448,8 @@ int main(int argc, char **argv)
         clear_params(cmd_line, argv);
         return status - 1;
     }
-    INIT_ADDR_STR(params.laddr);
-    LOG(LOG_S, "listen address: %s:%d\n", ADDR_STR, ntohs(params.laddr.in.sin_port));
+    LOG(LOG_S, "listen address: %s:%d\n", 
+        straddr(params.laddr).s, ntohs(params.laddr.in.sin_port));
     
     if (init() < 0 || run(&params.laddr) < 0) {
         clear_params(cmd_line, argv);

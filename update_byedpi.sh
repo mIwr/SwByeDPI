@@ -28,6 +28,7 @@ if [[ -d "$SUBMODULE_PATH" ]]; then
 fi
 
 # Prepare cloned directory
+echo "Prepare cloned directory for work at $SUBMODULE_PATH"
 rm -rf "$SUBMODULE_PATH/.git"
 rm -rf "$SUBMODULE_PATH/.github"
 rm -rf "$SUBMODULE_PATH/dist"

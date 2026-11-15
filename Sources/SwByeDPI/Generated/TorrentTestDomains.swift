@@ -23,6 +23,7 @@ public final class TorrentTestDomains {
       "bt3.t-ru.org",
       "bt4.t-ru.org",
       "nyaa.si",
+      "nyaa.media",
       "nnmclub.to",
       "nnm-club-me.ru",
       "nnmstatic.win",

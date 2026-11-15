@@ -1,0 +1,25 @@
+import Foundation
+
+/// Generated domains from DeepSeekTestDomains.domains
+public final class DeepSeekTestDomains {
+  /// Domains list
+  public static let domainsList = SBDDomainList(name: "DeepSeekTestDomains", domains: Set<String>([
+      "www.deepseek.com",
+      "cdn.deepseek.com",
+      "chat.deepseek.com",
+      "lf3-data.volccdn.com",
+      "apm.volccdn.com",
+      "gator.volces.com",
+      "apmplus.volces.com",
+      "fe-static.deepseek.com",
+      "lf3-data.volccdn.com",
+      "apm.volccdn.com",
+      "apmplus.volces.com",
+      "chat.deepseek.com",
+      "challenges.cloudflare.com",
+      "gator.volces.com",
+      "static.deepseek.com",
+      "hif-leim.deepseek.com",
+      "hif-dliq.deepseek.com",
+  ]))
+  fileprivate init() {} }

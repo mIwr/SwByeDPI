@@ -12,6 +12,8 @@ public final class TwitterTestDomains {
       "twitterflightschool.com",
       "api.twitter.com",
       "api.x.com",
+      "jf.x.com",
+      "grok.com",
       "cdn.syndication.twimg.com",
       "dc-api.twitter.com",
       "pbs-ak.twimg.com",

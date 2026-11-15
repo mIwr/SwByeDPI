@@ -32,6 +32,7 @@ public final class SBDURLSessionUtil {
         }
         if let safeTimeoutIntervalForResourceInS = timeoutIntervalForResourceInS, safeTimeoutIntervalForResourceInS > 0 {
             configuration.timeoutIntervalForResource = TimeInterval(safeTimeoutIntervalForResourceInS)
+            configuration.timeoutIntervalForRequest = TimeInterval(safeTimeoutIntervalForResourceInS)
         }
         configuration.connectionProxyDictionary = [
             "HTTPSEnable": 1,//kCFNetworkProxiesHTTPEnable as String: 1,
@@ -56,6 +57,7 @@ public final class SBDURLSessionUtil {
         }
         if let safeTimeoutIntervalForResourceInS = timeoutIntervalForResourceInS, safeTimeoutIntervalForResourceInS > 0 {
             configuration.timeoutIntervalForResource = TimeInterval(safeTimeoutIntervalForResourceInS)
+            configuration.timeoutIntervalForRequest = TimeInterval(safeTimeoutIntervalForResourceInS)
         }
         configuration.connectionProxyDictionary = [
             //kCFNetworkProxiesSOCKSEnable: true,

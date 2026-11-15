@@ -138,15 +138,16 @@ static struct elem_i *cache_add(
 static int on_socks_recv(struct poolhd *pool, struct eval *val, int t)
 {
     struct s5_req r = { 0 };
+    evcb_t ret = val->after_conn_cb;
     
     ssize_t n = recv(val->fd, (char *)&r, sizeof(r), 0);
     if (n < 2) {
         uniperror("socks recv");
-        return (val->after_conn_cb)(pool, val, POLLERR);
+        return (ret)(pool, val, POLLERR);
     }
     if (r.ver != S_VER5 || r.cmd != S_ER_OK) {
         LOG(LOG_E, "socks answer: %d\n", r.cmd);
-        return (val->after_conn_cb)(pool, val, POLLERR);
+        return (ret)(pool, val, POLLERR);
     }
     if (val->conn_state != FLAG_S5) {
         r.cmd = S_CMD_CONN;
@@ -154,23 +155,23 @@ static int on_socks_recv(struct poolhd *pool, struct eval *val, int t)
         
         if (send(val->fd, (char *)&r, len, 0) < 0) {
             uniperror("socks send");
-            return (val->after_conn_cb)(pool, val, POLLERR);
+            return (ret)(pool, val, POLLERR);
         }
         val->conn_state = FLAG_S5;
         return 0;
     }
-    val->cb = val->after_conn_cb;
-    
-    return (val->cb)(pool, val, POLLOUT);
+    val->cb = ret;
+    return (ret)(pool, val, POLLOUT);
 }
+
 
 static int on_socks_conn(struct poolhd *pool, struct eval *val, int t)
 {
-    static const char data[3] = { S_VER5, 0x01, 0x00 };
+    static const char data[] = { S_VER5, 0x01, S_AUTH_NONE };
     
     if (send(val->fd, (char *)data, sizeof(data), 0) < 0) {
         uniperror("socks send");
-        return (val->after_conn_cb)(pool, val, t);
+        return (val->after_conn_cb)(pool, val, POLLERR);
     }
     if (mod_etype(pool, val, POLLIN)) {
         uniperror("mod_etype");
@@ -346,7 +347,6 @@ int on_trigger(int type, struct poolhd *pool, struct eval *val, bool client_aliv
     bool before_req = !lav->recv_count && !val->recv_count;
     
     bool can_reconn = ((lav->sq_buff || before_req) && client_alive);
-    INIT_ADDR_STR((val->addr));
     
     struct elem_i *cache = cache_add(&val->addr, &lav->host, lav->host_len);
     if (!cache) {
@@ -382,13 +382,13 @@ int on_trigger(int type, struct poolhd *pool, struct eval *val, bool client_aliv
         lav->dp->pri++;
     }
     if (!next) {
-        LOG(LOG_S, "unreach ip: %s\n", ADDR_STR);
+        LOG(LOG_S, "unreach ip: %s\n", straddr(val->addr).s);
         cache->dp_mask = 0;
         cache->detect = 0;
         cache->dp = params.dp;
         return -1;
     }
-    LOG(LOG_S, "save: ip=%s, id=%d\n", ADDR_STR, next->id);
+    LOG(LOG_S, "save: ip=%s, id=%d\n", straddr(val->addr).s, next->id);
     
     cache->dp_mask |= lav->dp_mask;
     cache->detect = lav->detect;
@@ -433,10 +433,10 @@ static int on_fin(struct poolhd *pool, struct eval *val)
 
 
 int on_timeout(struct poolhd *pool, struct eval *val) {
-    if (++val->to_count >= params.to_count_lim) {
+    if (++val->to_count >= params.tls_to_count_lim) {
         return on_torst(pool, val);
     }
-    set_timer(pool, val, params.ptimeout);
+    set_timer(pool, val, params.tls_timeout, TV_TIMEOUT);
     return 0;
 }
 
@@ -482,8 +482,8 @@ static int try_set_tls_timer(struct poolhd *pool,
         struct eval *val, const char *buff, ssize_t n)
 {
     ssize_t pos = 0;
-    if (params.to_bytes_lim 
-            && val->recv_count > params.to_bytes_lim) {
+    if (params.tls_to_bytes_lim 
+            && val->recv_count > params.tls_to_bytes_lim) {
         remove_timer(pool, val);
         return -1;
     }
@@ -517,10 +517,10 @@ static int try_set_tls_timer(struct poolhd *pool,
         val->tls_rec_pos += end; pos += end;
     } while (pos < n);
     
-    if (params.ptimeout) {
+    if (params.tls_timeout) {
         remove_timer(pool, val);
         if (val->tls_rec_pos != val->tls_rec_size) {
-            set_timer(pool, val, params.ptimeout);
+            set_timer(pool, val, params.tls_timeout, TV_TIMEOUT);
         }
     }
     return 0;
@@ -607,7 +607,7 @@ int connect_hook(struct poolhd *pool, struct eval *val,
     }
     struct desync_params *dp = find_dp(val, 0, 0, dst);
     if (!dp) {
-        LOG(LOG_E, "drop connection\n");
+        LOG(LOG_E, "drop connection (addr=%s)\n", straddr(*dst).s);
         return -1;
     }
     val->dp = dp;
@@ -621,8 +621,22 @@ int connect_hook(struct poolhd *pool, struct eval *val,
         val->addr = *dst;
         return 0;
     }
+    if (dp->rst) {
+        LOG(LOG_S, "drop connection (addr=%s)\n", straddr(*dst).s);
+        return -1;
+    }
     if (dp->out_type) {
-        int e = create_conn(pool, val, &dp->out_addr, 
+        union sockaddr_u out_addr = dp->out_addr;
+        
+        if (!out_addr.in.sin_port) {
+            out_addr.in.sin_port = dst->in.sin_port;
+        }
+        if (!out_addr.in.sin_family) {
+            out_addr.in6.sin6_family = dst->in6.sin6_family;
+            memcpy(&out_addr.in.sin_addr, &dst->in.sin_addr, 
+                sizeof(out_addr) - offsetof(union sockaddr_u, in.sin_addr));
+        }
+        int e = create_conn(pool, val, &out_addr, 
             dp->out_type == MODE_SOCKS5 ? &on_socks_conn : next);
         if (!e) {
             val->pair->after_conn_cb = next;
@@ -644,6 +658,7 @@ static int setup_conn(struct eval *client, const char *buffer, ssize_t n)
     save_hostname(client, buffer, n);
     client->mark = is_tls_chello(buffer, n);
     client->dp = dp;
+    dp->calls++;
     
     if (params.timeout 
             && set_timeout(client->pair->fd, params.timeout)) {
@@ -667,6 +682,7 @@ static int cancel_setup(struct eval *remote)
 
 static int handle_err(struct poolhd *pool, struct eval *val, int e)
 {
+    LOG(LOG_E, "recv: %s (addr=%s)\n", strerr(get_e()).s, straddr(val->addr).s);
     switch (e) {
         case ECONNRESET:
         case ECONNREFUSED:
@@ -710,8 +726,11 @@ ssize_t tcp_send_hook(struct poolhd *pool,
             return 0;
         }
     }
+    else if (params.tls_timeout 
+            && remote->pair->mark && !remote->recv_count) {
+        set_timer(pool, remote, params.tls_timeout, TV_TIMEOUT);
+    }
     if (sn < 0) {
-        uniperror("send");
         return handle_err(pool, remote, get_e());
     }
     remote->pair->round_sent += sn;
@@ -730,7 +749,6 @@ ssize_t tcp_recv_hook(struct poolhd *pool,
         if (get_e() == EAGAIN) {
             return 0;
         }
-        uniperror("recv");
         return handle_err(pool, val, get_e());
     }
     val->recv_count += n;
@@ -758,7 +776,7 @@ ssize_t tcp_recv_hook(struct poolhd *pool,
             val->pair->mark = 0;
         }
         if (val->to_count >= 0 && params.timeout 
-                && (params.to_bytes_lim && val->recv_count > params.to_bytes_lim)) {
+                && (params.tcp_to_bytes_lim && val->recv_count > params.tcp_to_bytes_lim)) {
             set_timeout(val->fd, 0);
             val->to_count = -1;
         }

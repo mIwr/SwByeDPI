@@ -41,5 +41,7 @@ public final class TwitterShortTestDomains {
       "analytics.x.com",
       "api-stream.twitter.com",
       "api-0-4-0.twitter.com",
+      "jf.x.com",
+      "grok.com",
   ]))
   fileprivate init() {} }

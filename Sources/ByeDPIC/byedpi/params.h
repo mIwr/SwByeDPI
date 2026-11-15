@@ -121,6 +121,8 @@ struct desync_params {
     uint16_t pf[2];
     int rounds[2];
     
+    bool rst;
+    
     uint16_t out_type;
     union sockaddr_u out_addr;
     
@@ -129,6 +131,7 @@ struct desync_params {
     uint64_t bit;
     int fail_count;
     int pri;
+    int calls;
     const char *str;
     long cache_ttl;
     const char *cache_file;
@@ -147,9 +150,10 @@ struct params {
     bool custom_ttl;
     
     bool tfo;
-    unsigned int timeout, ptimeout;
-    int to_count_lim;
-    int to_bytes_lim;
+    unsigned int timeout, tls_timeout;
+    int tls_to_count_lim;
+    int tls_to_bytes_lim;
+    int tcp_to_bytes_lim;
     char cache_pre;
     int mode;
     bool ipv6;

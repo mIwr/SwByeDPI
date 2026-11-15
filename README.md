@@ -50,8 +50,8 @@ SwByeDPI is available through SPM
 
 There are 3 modules-libraries:
 
-1. [ByeDPIC](./Sources/ByeDPIC) - Low-level compiled C-module. It doesn't contain any ObjC/Swift sources, so it can be used on the oldest Apple devices. Not recomended for use
-2. [ByeDPIKit](./Sources/ByeDPIKit) - ByeDPIC minimal wrapper. It allows to start/stop native byedpi SOCKS proxy with DPI-evasion parameters. This module doesn't contain any Apple platform-specific checks for byedpi command-line arguments
+1. [ByeDPIC](./Sources/ByeDPIC) - Low-level compiled C-module. It doesn't contain any ObjC/Swift sources, so it can be used on the oldest Apple devices (supports macOS 10.12+, iOS 9.0+, tvOS 9.0+, watchOS 2.0+, visionOS 1.0+). Not recomended for use
+2. [ByeDPIKit](./Sources/ByeDPIKit) - ByeDPIC minimal wrapper. It allows to start/stop native byedpi SOCKS proxy with DPI-evasion parameters. Supports Apple macOS 10.12+, tvOS 10.0+, watchOS 3.0+, visionOS 1.0+. This module doesn't contain any Apple platform-specific checks for byedpi command-line arguments
 3. [SwByeDPI](./Sources/SwByeDPI) - ByeDPIC extended wrapper, which is based on ByeDPIKit. It contains byedpi launch config abstractions, proxified (SOCKS) URLSession's init tools, [bundled strategies' and domains' sets for testing and further use](./Assets). Also it contains strategy testing and analyzing features
 
 **SwByeDPI SPM setup**
